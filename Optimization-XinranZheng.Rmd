@@ -1,0 +1,758 @@
+---
+title: "Assignment 2, Optimization"
+author: Xinran Zheng
+
+date: "Feburary 3th, 2018"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+documentclass: article
+fontsize: 12pt
+biblio-style: datalab
+papersize: letter
+
+---
+
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+## some utility functions, see the source code for details
+#source("utils_template.R")
+
+## specify the packages needed
+pkgs <- c("splines2", "DT", "webshot", "leaflet")
+#need.packages(pkgs)
+
+## external data can be read in by regular functions,
+## such as read.table or load
+
+## get output format in case something needs extra effort
+outFormat <- knitr::opts_knit$get("rmarkdown.pandoc.to")
+## "latex" or "html"
+
+## for latex and html output
+isHtml <- identical(outFormat, "html")
+isLatex <- identical(outFormat, "latex")
+latex <- ifelse(isLatex, '\\LaTeX\\', 'LaTeX')
+
+## specify global chunk options
+knitr::opts_chunk$set(fig.width = 5, fig.height = 4, dpi = 300,
+                      out.width = "90%", fig.align = "center")
+
+```
+
+
+# Question 1
+
+The following could be derived by hand.
+
+\begin{align}
+l(\theta) = \ln\prod_{i = 1}^n \frac{1}{\pi[1+(x-\theta)^2]} = \sum_{i=1}^n \ln\frac{1}{\pi[1+(x-\theta)^2]} = \sum_{i=1}^n [\ln\frac{1}{\pi} + \ln\frac{1}{1+(x-\theta)^2}] = -n\ln\pi - \sum_{i=1}^n \ln[1+(x-\theta)^2]&\\
+\end{align}
+
+\begin{align}
+l' (\theta) = - \sum_{i=1}^n \frac{2(\theta-x_i)}{1+(\theta-x_i)^2} = - 2\sum_{i=1}^n \frac{\theta - x_i}{1+(\theta-x_i)}&\\
+\end{align}
+
+\begin{align}
+l''(\theta) = -2\sum_{i=1}^n\frac{1+(\theta-x_i)^2-2(\theta-x_i)(\theta-x_i)}{[1+(\theta-x_i)^2]^2} = -2\sum_{i=1}^n \frac{1-(\theta-x_i)^2}{[1+(\theta-x_i)^2]^2}&
+\end{align}
+
+\begin{align}
+I(\theta) &= n\int\frac{\{p'(x)\}^2}{p(x)}dx\\ 
+          &= n\int\frac{4(x-\theta)^2\pi[1+(x-\theta)^2]}{\pi[1+(x-\theta)^2]^4}dx&\\
+          &= \frac{4n}{\pi} \int_{-\infty}^\infty \frac{x^2}{(1+x^2)^3}dx&\\
+          &= \frac{4n}{\pi} \int_{-\infty}^\infty [(\frac{1}{(1+x^2)^2}-\frac{1}{(1+x^2)^3})]dx&\\
+          &= \frac{4n}{\pi} (\int_{-\infty}^\infty \frac{1}{(1+x^2)^2}dx-\int_{-\infty}^\infty\frac{1}{(1+x^2)^3}dx)&\\
+          &= \frac{4n}{\pi} [\frac{1}{4}(\frac{x}{2(x^2+1)}|_{-\infty}^{\infty}+\frac{1}{2}\int_{-\infty}^{\infty}\frac{1}{1+x^2}dx)-\frac{x}{4(x^2+1)^2}|_{-\infty}^\infty]&\\
+          &= \frac{4n}{\pi}(\frac{x(x^2-1)}{8(x^2+1)^2}|_{-\infty}^\infty+\frac{1}{8}\int_{-\frac{\pi}{2}}^{\frac{\pi}{2}} \frac{\sec^2t}{1+\tan^2t}dt)&\\
+          &= \frac{4n}{\pi}(0+\frac{\pi}{8})&\\
+          &= \frac{n}{2}&\\
+\end{align}
+
+
+I graph the log-likelihood function and the optimized parameters under the conditions given by $(b)$, $(c)$, $(d)$ and $(e)$. 
+
+```{r, echo = FALSE, warning = FALSE}
+
+library(ggplot2)
+
+xQuestion1 <- c(1.77, -0.23, 2.76, 3.80, 3.47, 56.75, -1.34, 
+                4.24, -2.44, 3.29, 3.71, -2.40, 4.53, -0.07, 
+                -1.05, -13.87, -2.53, -1.75)
+sampleDataQ2 <- c(3.91, 4.85, 2.28, 4.06, 3.70, 4.04, 5.46, 3.53, 2.28, 1.96,
+                 2.53, 3.88, 2.22, 3.47, 4.82, 2.46, 2.99, 2.54, 0.52)
+
+llExpression <- expression(log(1 / (pi * (1 + (x - theta) ** 2))))
+llExpressionQ2 <- expression(log((1 - cos(x - theta)) / (2 * pi)))
+sampleData <- xQuestion1
+thetaMomentQ2 <- asin(mean(sampleDataQ2) - pi)
+
+LogLikelihood1 <- function(theta, xEv, llExpression)
+{ # function LogLikelihood1
+  result <- c()
+  for (i in 1:length(xEv)) 
+  {
+    theta <- theta
+    x <- xEv[i]
+    result[i] <- eval(llExpression)
+  }
+  return(sum(result))
+} # end function LogLikelihood1
+
+VectorizedFirstD <- function(theta, xV, expressionFD, nameFD)
+{ # function VectorizedFirstD
+  x <- xV
+  theta <- theta
+  return(eval(D(expressionFD, nameFD)))
+} # end function VectorizedFirstD
+
+VectorizedSecondD <- function(theta, xV, expressionSD, nameSD)
+{ # function VectorizedSecondD
+  x <- xV
+  theta <- theta
+  firstD <- as.expression(D(expressionSD, nameSD))
+  return(eval(D(firstD, nameSD)))
+} # end function VectorizedSecondD
+
+NewtonUpdateLogLikelihood <- function(theta, sampleData, llExpression)
+{ # function NewtonUpdateLogLikelihood
+  theta <- theta
+  gradient <- sapply(X = sampleData, 
+                     FUN = VectorizedFirstD, 
+                     theta = theta,
+                     expressionFD = llExpression,
+                     nameFD = "theta")
+  hessian <- sapply(X = sampleData, 
+                    FUN = VectorizedSecondD, 
+                    theta = theta,
+                    expressionSD = llExpression, 
+                    nameSD = "theta")
+  return(-1 * rowSums(t(as.matrix(gradient))) / rowSums(t(as.matrix(hessian))))
+} # end function NewtonUpdateLogLikelihood
+
+NewtonRaphson <- function(theta, sampleData, llExpression)
+{ # function NewtonRaphson
+  error <- Inf
+  i <- 1
+  while (error >= 0.001 & i <= 500)
+  { # while error >= 0.001
+    update <- NewtonUpdateLogLikelihood(theta, sampleData, llExpression)
+    theta <- theta + update
+    error <- sum(abs(update))
+    i <- i + 1
+    if (error > 500)
+    {
+      return(NA)
+    }
+  } # end while error >= 0.001
+  return(theta)
+} # end function NewtonRaphson
+
+FixedPoint <- function(theta, sampleData, llExpression, a)
+{ # function FixedPoint
+  error <- Inf
+  i <- 1
+  while (error >= 0.001 & i <= 500)
+  { # while error >= 0.001
+    gradient <- sapply(X = sampleData, 
+                       FUN = VectorizedFirstD, 
+                       theta = theta,
+                       expressionFD = llExpression,
+                       nameFD = "theta")
+    update <- rowSums(t(as.matrix(gradient))) * a
+    theta <- theta + update
+    error <- sum(abs(update))
+    #print(error)
+    i <- i + 1
+    if (error > 500)
+    {
+      return(NA)
+    }
+  } # end while error >= 0.001
+  return(theta)
+} # end function FixedPoint
+
+FisherScore <- function(theta, sampleData, llExpression)
+{ # function FisherScore
+  error <- Inf
+  i <- 1
+  while (error >= 0.001 & i <= 500)
+  { # while error >= 0.001
+    gradient <- sapply(X = sampleData, 
+                       FUN = VectorizedFirstD, 
+                       theta = theta,
+                       expressionFD = llExpression,
+                       nameFD = "theta")
+    update <- rowSums(t(as.matrix(gradient))) / (length(sampleData) / 2)
+    theta <- theta + update
+    error <- sum(abs(update))
+    #print(error)
+    i <- i + 1
+    if (error > 500)
+    {
+      return(NA)
+    }
+  } # end while error >= 0.001
+  return(theta)
+} # end function FisherScore
+
+
+theta <-  as.matrix(c(-11, -1, 0, 1.5, 4, 4.7, 7, 8, 38))
+dummy <-  seq(-5, 5, length.out = 200)
+dummyQ2 <-  seq(-pi, pi, length.out = 200)
+logLikelihood <- apply(as.matrix(dummy), 
+                       MARGIN = 1, 
+                       FUN = LogLikelihood1, 
+                       xEv = sampleData, 
+                       llExpression = llExpression)
+logLikelihoodQ2 <- apply(as.matrix(dummyQ2), 
+                         MARGIN = 1, 
+                         FUN = LogLikelihood1, 
+                         xEv = sampleDataQ2, 
+                         llExpression = llExpressionQ2)
+outDF <- data.frame(logLikelihood, rownames = dummy)
+outDFQ2 <- data.frame(logLikelihoodQ2, rownames = dummyQ2)
+thetaStar <- sapply(theta, 
+                    FUN = NewtonRaphson, 
+                    sampleData = sampleData, 
+                    llExpression = llExpression)
+optLogLikelihood <- apply(as.matrix(thetaStar), 
+                          MARGIN = 1, 
+                          FUN = LogLikelihood1, 
+                          xEv = sampleData, 
+                          llExpression = llExpression)
+optDF <- data.frame(optLogLikelihood, rownames = thetaStar)
+plotQ1 <- ggplot(outDF, 
+                 aes(dummy, logLikelihood)) + 
+                 geom_line() + 
+                 labs(x = "θ", y = "Log Likelihood Question 1")
+plotQ2 <- ggplot(outDFQ2, 
+                 aes(dummyQ2, logLikelihoodQ2)) + 
+                 geom_line() + 
+                 labs(x = "θ", y = "Log Likelihood Quesion 2")
+a <- c(1, 0.64, 0.25)
+thetaStarFP1 <- sapply(theta,
+                       FUN = FixedPoint,
+                       sampleData = sampleData,
+                       llExpression = llExpression,
+                       a = a[1])
+thetaStarFP2 <- sapply(theta,
+                       FUN = FixedPoint,
+                       sampleData = sampleData,
+                       llExpression = llExpression,
+                       a = a[2])
+thetaStarFP3 <- sapply(theta,
+                       FUN = FixedPoint,
+                       sampleData = sampleData,
+                       llExpression = llExpression,
+                       a = a[3])
+thetaStarFS <- sapply(theta,
+                      FUN = FisherScore,
+                      sampleData = sampleData,
+                      llExpression = llExpression)
+thetaStarFSNR <- sapply(thetaStarFS,
+                        FUN = NewtonRaphson,
+                        sampleData = sampleData,
+                        llExpression = llExpression)
+thetaStarQ2c <- sapply(thetaMomentQ2,
+                       FUN = NewtonRaphson,
+                       sampleData = sampleDataQ2,
+                       llExpression = llExpressionQ2)
+thetaQ2d <- c(-2.7, 2.7)
+thetaStarQ2d <- sapply(thetaQ2d,
+                       FUN = NewtonRaphson,
+                       sampleData = sampleDataQ2,
+                       llExpression = llExpressionQ2)
+thetaStarQ2e <- sapply(dummyQ2,
+                       FUN = NewtonRaphson,
+                       sampleData = sampleDataQ2,
+                       llExpression = llExpressionQ2)
+optLogLikelihood1 <- apply(as.matrix(thetaStarFP1), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleData, 
+                           llExpression = llExpression)
+optLogLikelihood2 <- apply(as.matrix(thetaStarFP2), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleData, 
+                           llExpression = llExpression)
+optLogLikelihood3 <- apply(as.matrix(thetaStarFP3), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleData, 
+                           llExpression = llExpression)
+optLogLikelihood4 <- apply(as.matrix(thetaStarFS), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleData, 
+                           llExpression = llExpression)
+optLogLikelihood5 <- apply(as.matrix(thetaStarFSNR), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleData, 
+                           llExpression = llExpression)
+optLogLikelihoodQ2c <- apply(as.matrix(thetaStarQ2c), 
+                           MARGIN = 1, 
+                           FUN = LogLikelihood1, 
+                           xEv = sampleDataQ2, 
+                           llExpression = llExpressionQ2)
+optLogLikelihoodQ2d <- apply(as.matrix(thetaStarQ2d), 
+                             MARGIN = 1, 
+                             FUN = LogLikelihood1, 
+                             xEv = sampleDataQ2, 
+                             llExpression = llExpressionQ2)
+optLogLikelihoodQ2e <- apply(as.matrix(thetaStarQ2e), 
+                             MARGIN = 1, 
+                             FUN = LogLikelihood1, 
+                             xEv = sampleDataQ2, 
+                             llExpression = llExpressionQ2)
+optLogLikelihood1 <- data.frame(optLogLikelihood1, rownames = thetaStarFP1)
+optLogLikelihood2 <- data.frame(optLogLikelihood2, rownames = thetaStarFP2)
+optLogLikelihood3 <- data.frame(optLogLikelihood3, rownames = thetaStarFP3)
+optLogLikelihood4 <- data.frame(optLogLikelihood4, rownames = thetaStarFS)
+optLogLikelihood5 <- data.frame(optLogLikelihood5, rownames = thetaStarFSNR)
+optLogLikelihoodQ2c <- data.frame(optLogLikelihoodQ2c, rownames = thetaStarQ2c)
+optLogLikelihoodQ2d <- data.frame(optLogLikelihoodQ2d, rownames = thetaStarQ2d)
+optLogLikelihoodQ2e <- data.frame(optLogLikelihoodQ2e, rownames = thetaStarQ2e)
+
+plot2 <- plotQ1 + geom_point(data = optDF, 
+                            mapping = aes(x = thetaStar, y = optDF[[1]]), 
+                            color = "red") + 
+                            labs(caption = "Newton Raphson") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+plot3 <- plotQ1 + geom_point(data = optLogLikelihood1, 
+                            mapping = aes(x = thetaStarFP1, y = optLogLikelihood1[[1]]), 
+                            color = "blue") + 
+                            labs(caption = "Fixed Point, a = 1") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+plot4 <- plotQ1 + geom_point(data = optLogLikelihood2, 
+                            mapping = aes(x = thetaStarFP2, y = optLogLikelihood2[[1]]), 
+                            color = "yellow") + 
+                            labs(caption = "Fixed Point, a = 0.64") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+plot5 <- plotQ1 + geom_point(data = optLogLikelihood3, 
+                            mapping = aes(x = thetaStarFP3, y = optLogLikelihood3[[1]]), 
+                            color = "green") + 
+                            labs(caption = "Fixed Point, a = 0.25") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+plot6 <- plotQ1 + geom_point(data = optLogLikelihood4, 
+                            mapping = aes(x = thetaStarFS, y = optLogLikelihood4[[1]]), 
+                            color = "brown") + 
+                            labs(caption = "Fisher Score") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+
+plot7 <- plotQ1 + geom_point(data = optLogLikelihood5, 
+                            mapping = aes(x = thetaStarFSNR, y = optLogLikelihood5[[1]]), 
+                            color = "purple") + 
+                            labs(caption = "Fisher Score, Refined by Newton Raphson") + 
+                            theme(plot.caption = element_text(hjust = 0.5))
+plotQ2c <- plotQ2 + geom_point(data = optLogLikelihoodQ2c, 
+                               mapping = aes(x = thetaStarQ2c, y = optLogLikelihoodQ2c[[1]]), 
+                               color = "red") + 
+                               labs(caption = "Newton-Raphson, method-of-moments estimator") + 
+                               theme(plot.caption = element_text(hjust = 0.5))
+plotQ2d <- plotQ2 + geom_point(data = optLogLikelihoodQ2d, 
+                               mapping = aes(x = thetaStarQ2d, y = optLogLikelihoodQ2d[[1]]), 
+                               color = "blue") + 
+                               labs(caption = "Newton-Raphson, θ = -2.7 and θ = 2.7") + 
+                               theme(plot.caption = element_text(hjust = 0.5))
+
+
+thetaStarQ2e <- round(thetaStarQ2e, 4)
+margin <- c(0)
+for (i in 1:(length(thetaStarQ2e) - 1))
+{
+  if (thetaStarQ2e[i] != thetaStarQ2e[i + 1])
+  {
+    margin <- c(margin, i)
+  }
+}
+
+
+intervals <- c()
+for (i in 1:length(margin))
+{
+  intervals <- c(intervals, dummyQ2[margin[i]])
+}
+
+
+
+
+```
+```{r autodep = TRUE, echo = FALSE}
+
+plot2
+plot3
+plot4
+plot5
+plot6
+plot7
+
+```
+
+The $1{st}$, $7{th}$, $8{th}$ and $9{th}$ start points do not converge using Newton-Raphson Method. However, they all converge to local or global optimum using Fixed Point method and Fisher Scoring. Also, when $\alpha$ is relatively large, Fixed Point method does not have a good performance. Those fact implies that although Newton-Raphson method and large $\alpha$ Fixed Point method has relatively higher speeds, they are less stable compared with other methods.
+
+# Question 2
+
+The graph of the log-likelihood function is displayed by the following figure.  
+
+```{r autodep = TRUE, echo = FALSE}
+
+plotQ2
+
+```
+I could verify, by calculating the intergral $\int^{2\pi}_{0}xP(x)dx$, that
+\begin{align}
+ E[x|\theta]= \pi + \sin(\theta)
+\end{align}
+is the expression of the expected value. By setting it to be the sample mean, I could derive that $\theta{moment} = 0.09539407$.
+The MLE for $\theta{moment}$ is shown in the following graph.
+```{r autodep = TRUE, echo = FALSE}
+
+plotQ2c
+
+```
+The MLE for $\theta = -2.7$ and $\theta = 2.7$  is the vector
+```{r autodep = TRUE, echo = FALSE}
+
+thetaStarQ2d
+
+```
+By examining the MLE for the partition of the interval $[-\pi,\pi]$, I found that those points in different intervals will converge to different results, but the points inside the same interval will converge to the same result. The break points of the intervals described above are 
+```{r autodep = TRUE, echo = FALSE}
+
+intervals
+
+```
+
+# Question 3
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+library(plotly)
+
+
+NV <- c(2, 47, 192, 256, 768, 896, 1120, 896, 1184, 1024)
+timeTV <- c(0, 8, 28, 41, 63, 69, 97, 117, 135, 154)
+N0 <- 2
+fExpression <- expression((k * N0) / (N0 + (k - N0) * exp(- r * timeT)))
+zExpression <- expression(N - (k * N0) / (N0 + (k - N0) * exp(- r * timeT)))
+sqeExpression <- expression(((k * N0) / (N0 + (k - N0) * exp(- r * timeT)) - N) ** 2)
+partialK <- as.expression(D(sqeExpression, "k"))
+partialFK <- as.expression(D(fExpression, "k"))
+partialSK <- as.expression(D(partialK, "k"))
+partialR <- as.expression(D(sqeExpression, "r"))
+partialFR <- as.expression(D(fExpression, "r"))
+partialSR <- as.expression(D(partialR, "r"))
+
+SquareErrorQ3 <- function(theta, N0, NV, timeTV)
+{ # function SquareErrorQ3
+  result <- c()
+  k <- theta[1]
+  r <- theta[2]
+  for (i in 1:length(timeTV))
+  { # for i in 1:length(timeTV)
+    timeT <- timeTV[i]
+    N <- NV[i]
+    result[i] <- eval(sqeExpression)
+  } # for i in 1:length(timeTV)
+  return(sum(result))
+} # end function SquareErrorQ3
+
+EvalPK <- function(theta, N0, NV, timeTV)
+{ # function EvalPK
+  result <- c()
+  k <- theta[1]
+  r <- theta[2]
+  for (i in 1:length(timeTV))
+  { # for i in 1:length(timeTV)
+    timeT <- timeTV[i]
+    N <- NV[i]
+    result[i] <- eval(partialK)
+  } # end for i in 1:length(timeTV)
+  return(sum(result))
+} # end function EvalPK
+
+GetA <- function(theta, N0, NV, timeTV)
+{ # function getA
+  n <- length(NV)
+  nt <- length(theta)
+  k <- theta[1]
+  r <- theta[2]
+  aM <- matrix(NA, n, nt)
+  for (i in 1:n)
+  { # for i in 1:n
+    timeT <- timeTV[i]
+    N <- NV[i]
+    aM[i, 1] <- eval(partialFK)
+    aM[i, 2] <- eval(partialFR)
+  } # end for i in 1:n
+  return(aM)
+} # end function getA
+
+GetZ <- function(theta, N0, NV, timeTV)
+{ # function getZ
+  n <- length(NV)
+  nt <- length(theta)
+  k <- theta[1]
+  r <- theta[2]
+  zM <- matrix(NA, n, 1)
+  for (i in 1:n)
+  { # for i in 1:n
+    timeT <- timeTV[i]
+    N <- NV[i]
+    zM[i] <- eval(zExpression)
+  } # end for i in 1:n
+  return(zM)
+} # end function getZ
+
+EvalSPK <- function(theta, N0, NV, timeTV)
+{ # function EvalSPK
+  result <- c()
+  k <- theta[1]
+  r <- theta[2]
+  for (i in 1:length(timeTV))
+  { # for i in 1:length(timeTV)
+    timeT <- timeTV[i]
+    N <- NV[i]
+    result[i] <- eval(partialSK)
+  } # end for i in 1:length(timeTV)
+  return(sum(result))
+} # end function EvalSPK
+
+EvalPR <- function(k, r, N0, NV, timeTV)
+{ # function EvalPR
+  result <- c()
+  k <- k
+  r <- r
+  for (i in 1:length(timeTV))
+  { # for i in 1:length(timeTV)
+    timeT <- timeTV[i]
+    N <- NV[i]
+    result[i] <- eval(partialR)
+  } # end for i in 1:length(timeTV)
+  return(sum(result))
+} # end function EvalPR
+
+EvalSPR <- function(k, r, N0, NV, timeTV)
+{ # function EvalSPR
+  result <- c()
+  k <- k
+  r <- r
+  for (i in 1:length(timeTV))
+  { # for i in 1:length(timeTV)
+    timeT <- timeTV[i]
+    N <- NV[i]
+    result[i] <- eval(partialSR)
+  } # end for i in 1:length(timeTV)
+  return(sum(result))
+} # end function EvalSPR
+
+dummyK <- seq(1000, 1500, length.out = 500)
+dummyR <- seq(0, 0.5, length.out = 500)
+
+
+GaussNewtonQ3 <- function(theta0, N0, NV, timeTV)
+{ # function GaussNewtonQ3
+  errorBefore <- Inf
+  errorAfter <- 1000
+  i <- 1
+  while (abs(errorBefore - errorAfter) >= 0.0000001 & i <= 200) 
+  { # while abs(errorBefore - errorAfter) >= 0.0000001 & i <= 200
+    errorBefore <- errorAfter
+    zM <- GetZ(theta0, N0, NV, timeTV)
+    aM <- GetA(theta0, N0, NV, timeTV)
+    update <- solve(t(aM) %*% aM) %*% t(aM) %*% zM
+    theta0 <- theta0 + update
+    errorAfter <- sum(abs(update))
+    i <- i + 1
+  } # end while abs(errorBefore - errorAfter) >= 0.0000001 & i <= 200
+  return(theta0)
+} # end function GaussNewtonQ3
+
+
+dummyK <- as.matrix(dummyK)
+dummyR <- t(as.matrix(dummyR, byrow = TRUE))
+dummyS <- matrix(NA, 500, 500)
+for (i in 1:length(dummyK))
+{ # for i in 1:length(dummyK)
+  for (j in 1:length(dummyR))
+  { # for j in 1:length(dummyR)
+    dummyS[i, j] <- SquareErrorQ3(c(dummyK[i, 1], dummyR[1, j]), N0, NV, timeTV)
+  } # end for j in 1:length(dummyR)
+} # end for i in 1:length(dummyK)
+
+
+```
+
+By applying Gauss-Newton method, I could find the parameter vector $\theta = [K, r]$ to be
+```{r, echo = FALSE, warning = FALSE, autodep = TRUE}
+
+GaussNewtonQ3(c(1200, 0.5), N0, NV, timeTV)
+
+```
+
+With the help of the package plotly, I get the contour plot of the square error of the model.
+```{r, echo = FALSE, warning = FALSE, autodep = TRUE}
+
+plot_ly(x=dummyK[, 1],y=dummyR[1, ],z=dummyS, type="contour")
+
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+NV <- c(2, 47, 192, 256, 768, 896, 1120, 896, 1184, 1024)
+timeTV <- c(0, 8, 28, 41, 63, 69, 97, 117, 135, 154)
+N0 <- 2
+
+f3cLLExpression <- expression(- log((2 * pi * sd) ** 0.5) - ((log(N) - log((k * N0) / (N0 + (k - N0) * exp(- r * timeT)))) ** 2) / (2 * (sd ** 2)))
+q3cpartialSD <- as.expression(D(f3cLLExpression, "sd"))
+q3cpartialK <- as.expression(D(f3cLLExpression, "k"))
+q3cpartialR <- as.expression(D(f3cLLExpression, "r"))
+q3cpartialSSD <- as.expression(D(q3cpartialSD, "sd"))
+q3cpartialSK <- as.expression(D(q3cpartialK, "k"))
+q3cpartialSR <- as.expression(D(q3cpartialR, "r"))
+
+GetdSD <- function(theta, N0, NV, timeTV)
+{ # function GetdSD
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialSD)
+  } # end for
+  return(sum(result))
+} # end function GetdSD
+
+GetdK <- function(theta, N0, NV, timeTV)
+{ # function GetdK
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialK)
+  } # end for
+  return(sum(result))
+} # end function GetdK
+
+GetdR <- function(theta, N0, NV, timeTV)
+{ # function GetdR
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialR)
+  } # end for
+  return(sum(result))
+} # end function GetdR
+
+GetsdSD <- function(theta, N0, NV, timeTV)
+{ # function GetsdSD
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialSSD)
+  } # end for
+  return(sum(result))
+} # end function GetsdSD
+
+GetsdK <- function(theta, N0, NV, timeTV)
+{ # function GetsdK
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialSK)
+  } # end for
+  return(sum(result))
+} # end function GetsdK
+
+GetsdR <- function(theta, N0, NV, timeTV)
+{ # function GetsdR
+  result <- c()
+  N0 <- N0
+  k <- theta[1]
+  r <- theta[2]
+  sd <- theta[3]
+  for (i in 1:length(NV))
+  { # for
+    N <- NV[i]
+    timeT <- timeTV[i]
+    result[i] <- eval(q3cpartialSR)
+  } # end for
+  return(sum(result))
+} # end function GetsdR
+
+GetUpdate <- function(theta, N0, NV, timeTV)
+{ # function GetUpdate
+  updateSD <- -1 * GetdSD(theta, N0, NV, timeTV) / GetsdSD(theta, N0, NV, timeTV)
+  updateK <- -1 * GetdK(theta, N0, NV, timeTV) / GetsdK(theta, N0, NV, timeTV)
+  updateR <- -1 * GetdR(theta, N0, NV, timeTV) / GetsdR(theta, N0, NV, timeTV)
+  return(c(updateK, updateR, updateSD))
+} # end function GetUpdate
+
+NewtonQ3C <- function(theta0, N0, NV, timeTV)
+{ # function NewtonQ3C
+  errorBefore <- Inf
+  errorAfter <- 1000
+  i <- 1
+  varK <- c()
+  varR <- c()
+  varSD <- c()
+  while (is.na(abs(errorBefore - errorAfter)) == FALSE & is.nan(abs(errorBefore - errorAfter)) == FALSE & abs(errorBefore - errorAfter) >= 0.0001 & i <= 200) 
+  { # while abs(errorBefore - errorAfter) >= 0.0000001 & i <= 200
+    errorBefore <- errorAfter
+    update <- GetUpdate(theta0, N0, NV, timeTV)
+    theta0 <- theta0 + update
+    errorAfter <- sum(abs(update))
+    varK[i] <- theta0[1]
+    varR[i] <- theta0[2]
+    varSD[i] <- theta0[3]
+    i <- i + 1
+  } # end while abs(errorBefore - errorAfter) >= 0.0000001 & i <= 200
+  
+  return(c(theta0, var(varK), var(varR), var(varSD)))
+} # end function NewtonQ3C
+
+
+
+```
+
+Since $log(N_{t})$ is log-normal, $P(log(N_{t})) = \frac{1}{\sqrt{2\pi\sigma^2}}exp(-\frac{(log(N_t) - log(f_i))^2}{2\sigma^2})$. Then I derive the log-likelihood function by take the sum of $log(P(N_t))$. I use Newton-Raphson Method to optimize $\theta = [K, r, \sigma]$. One relatively stable convergence point I found is 
+```{r, echo = FALSE, warning = FALSE, autodep = TRUE}
+
+NewtonQ3C(c(1000, 0.1, 0.5), N0, NV, timeTV)[1:3]
+
+```
+The varience of the three parameters are 
+```{r, echo = FALSE, warning = FALSE, autodep = TRUE}
+
+NewtonQ3C(c(1000, 0.1, 0.5), N0, NV, timeTV)[4:6]
+
+```
